@@ -57,7 +57,7 @@ void setup() {
 	for (byte pcnt = 11; pcnt < 14; ++pcnt)
 		pinMode(pcnt, OUTPUT);
 	setup_timer1();
-	for (int i = 0; i < 13; ++i) {
+	for (int i = 0; i < 14; ++i) {
 		pwm_state[i].br.ante = pwm_state[i].br.ante_err = pwm_state[i].br.conseq = pwm_state[i].br
 				.conseq_err = 0;
 		pwm_state[i].state = 0;
