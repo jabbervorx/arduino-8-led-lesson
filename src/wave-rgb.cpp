@@ -1,34 +1,82 @@
-#include <Arduino.h>
+#include "Arduino.h"
 #include "HardwareSerial.h"
 
 typedef struct _int_bresenham {
-	short ante, conseq;
-	short ante_err, conseq_err;
+	byte ante, conseq;
+	byte err;
 } int_bresenham;
 
-/* 1.2 microsecs */
+#if 0
 static inline byte dither_bresenham(int_bresenham *br) {
 	byte ret;
-	if (br->ante == 0)
-		return 1;
-	if (br->conseq == 0)
-		return 2;
-	ret = 0;
-	if (br->ante_err < br->ante && br->conseq_err < br->conseq) {
-		br->conseq_err += br->ante;
-		br->ante_err += br->conseq;
+	int_bresenham brl;
+	brl.ante = br->ante;
+	if (brl.ante == 0)
+	return 1;
+	brl.conseq = br->conseq;
+	if (brl.conseq == 0)
+	return 2;
+	if (brl.ante == brl.conseq)
+	return 3;
+	brl.err = br->err;
+	if (brl.ante > brl.conseq) {
+		brl.err += brl.conseq;
+		if (brl.err >= brl.ante) {
+			ret = 3;
+			brl.err -= brl.ante;
+		} else {
+			ret = 2;
+		}
+	} else {
+		brl.err += brl.ante;
+		if (brl.err >= brl.conseq) {
+			brl.err -= brl.conseq;
+			ret = 3;
+		} else {
+			ret = 1;
+		}
 	}
-	if (br->ante <= br->ante_err) {
-		++ret;
-		br->ante_err -= br->ante;
-	}
-	if (br->conseq <= br->conseq_err) {
-		ret |= 2;
-		br->conseq_err -= br->conseq;
-	}
+	br->err = brl.err;
 	return ret;
 }
+#endif
 
+#define dither_bresenham(br, ret) do {\
+		int_bresenham brl;\
+		brl.ante = br.ante;\
+		if (brl.ante == 0) {\
+			ret = 1;\
+			break;\
+		}\
+		brl.conseq = br.conseq;\
+		if (brl.conseq == 0) {\
+			ret = 2;\
+			break;\
+		}\
+		if (brl.ante == brl.conseq) {\
+			ret = 3;\
+			break;\
+		}\
+		brl.err = br.err;\
+		if (brl.ante > brl.conseq) {\
+			brl.err += brl.conseq;\
+			if (brl.err >= brl.ante) {\
+				ret = 3;\
+				brl.err -= brl.ante;\
+			} else {\
+				ret = 2;\
+			}\
+		} else {\
+			brl.err += brl.ante;\
+			if (brl.err >= brl.conseq) {\
+				brl.err -= brl.conseq;\
+				ret = 3;\
+			} else {\
+				ret = 1;\
+			}\
+		}\
+		br.err = brl.err;\
+} while(0)
 // the setup routine runs once when you press reset:
 void setup_timer1() {
 	noInterrupts();
@@ -54,12 +102,11 @@ t_pwm_state pwm_state[14];
 
 void setup() {
 	// initialize the digital pin as an output.
-	for (byte pcnt = 11; pcnt < 14; ++pcnt)
+	for (byte pcnt = 6; pcnt < 14; ++pcnt)
 		pinMode(pcnt, OUTPUT);
 	setup_timer1();
 	for (int i = 0; i < 14; ++i) {
-		pwm_state[i].br.ante = pwm_state[i].br.ante_err = pwm_state[i].br.conseq = pwm_state[i].br
-				.conseq_err = 0;
+		pwm_state[i].br.ante = pwm_state[i].br.conseq = pwm_state[i].br.err = 0;
 		pwm_state[i].state = 0;
 	}
 //	Serial.begin(115200);
@@ -72,30 +119,31 @@ byte tbl_sinus[] = { 0, 4, 9, 13, 18, 22, 27, 31, 35, 40, 44, 49, 53, 57, 62, 66
 		214, 216, 219, 221, 223, 225, 227, 229, 231, 233, 235, 236, 238, 240, 241, 243, 244, 245,
 		246, 247, 248, 249, 250, 251, 252, 253, 253, 254, 254, 254, 255, 255, 255, 255 };
 
-short irsinus(int grad) {
+byte iasinus(int grad) {
 	short ret;
-	int ag;
+	byte ag;
 	grad %= 360;
 	if (grad < 0)
 		grad += 360;
-	ag = grad % 180;
+	ag = (byte) (grad % 180);
 	if (ag > 90)
 		ag = 180 - ag;
 	ret = tbl_sinus[ag];
-	if (grad > 180)
-		ret = -ret;
+	/*
+	 * return only absolute values
+	 *
+	 if (grad > 180)
+	 ret = -ret;
+	 */
 	return ret;
 }
 
-/* 1.25 microsecs */
-static inline void maskWriteB(byte set, byte mask) {
-	byte state = PORTB;
-	byte old_state = state;
-	state &= ~mask;
-	state |= set;
-	if (old_state != state)
-		PORTB = state;
-}
+#define portWrite(set,mask,port) do {\
+		byte state = port;\
+		state &= ~mask;\
+		state |= set;\
+		port = state;\
+	} while(0)
 
 int current_grad = 1;
 unsigned long next_turn = 0;
@@ -107,48 +155,49 @@ void loop() {
 		++current_grad;
 		if (current_grad >= 360)
 			current_grad -= 360;
-		short cs = irsinus(current_grad);
-		if (cs < 0)
-			cs = -cs;
-		pwm_state[11].br.ante = cs;
-		pwm_state[11].br.conseq = tbl_sinus_scale - cs;
-		cs = irsinus(current_grad + pot_value / 4);
-		if (cs < 0)
-			cs = -cs;
-		pwm_state[12].br.ante = cs;
-		pwm_state[12].br.conseq = tbl_sinus_scale - cs;
-		cs = irsinus(current_grad + pot_value / 2);
-		if (cs < 0)
-			cs = -cs;
-		pwm_state[13].br.ante = cs;
-		pwm_state[13].br.conseq = tbl_sinus_scale - cs;
-		next_turn = time + 10;
+		short ptinc = pot_value / 4;
+		short ptinc_add = 0;
+		for (byte pcnt = 6; pcnt < 14; ++pcnt, ptinc_add += ptinc) {
+			byte cs = iasinus(current_grad + ptinc_add);
+			pwm_state[pcnt].br.ante = cs;
+			pwm_state[pcnt].br.conseq = tbl_sinus_scale - cs;
+		}
+		next_turn = time + 3;
 	}
 }
 
-ISR(TIMER1_COMPA_vect)          // timer compare interrupt service routine
-{
+ISR(TIMER1_COMPA_vect) {
 	byte set = 0;
-	for (byte pcnt = 11; pcnt < 14; ++pcnt) {
-#define	bpin  (pcnt-8)
 #define cpwm  pwm_state[pcnt]
-		if (cpwm.state == 0) {
-			cpwm.state = dither_bresenham(&cpwm.br);
-		}
-		if (cpwm.state & 1) {
-			set |= (HIGH << bpin);
-			--cpwm.state;
-		} else if (cpwm.state & 2) {
-			cpwm.state -= 2;
-		}
+#define bresenham_cycle(bpin) \
+	do {\
+		byte cs = cpwm.state;\
+		if (cs == 0) {\
+			dither_bresenham(cpwm.br, cs);\
+		}\
+		if (cs & 1) {\
+			set |= (HIGH << (bpin));\
+			--cs;\
+		} else if (cs & 2) {\
+			cs -= 2;\
+		}\
+		cpwm.state = cs;\
+	} while(0)
+	for (byte pcnt = 6; pcnt < 8; ++pcnt) {
+		bresenham_cycle(pcnt);
 	}
-	maskWriteB(set, 0b00111000);
+	portWrite(set, 0b11000000, PORTD);
+	set = 0;
+	for (byte pcnt = 8; pcnt < 14; ++pcnt) {
+		bresenham_cycle(pcnt-8);
+	}
+	portWrite(set, 0b00111111, PORTB);
 }
 
 int main(void) {
 	init();
 	setup();
-	//endless loop
+//endless loop
 	for (;;) {
 		loop();
 	}
